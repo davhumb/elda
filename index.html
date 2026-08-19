@@ -45,6 +45,26 @@ body::after{
   pointer-events:none;z-index:9999;opacity:.4;
 }
 
+#iosUnlockOverlay{
+  position:fixed;inset:0;
+  background:var(--bg);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:16px;z-index:99999;cursor:pointer;
+  -webkit-tap-highlight-color:transparent;
+}
+#iosUnlockOverlay .ul-logo{
+  font-family:'Bebas Neue';font-size:3rem;letter-spacing:.15em;color:var(--accent);
+}
+#iosUnlockOverlay .ul-sub{
+  font-size:.65rem;letter-spacing:.25em;text-transform:uppercase;color:var(--text-dim);
+}
+#iosUnlockOverlay .ul-tap{
+  font-size:.75rem;letter-spacing:.2em;text-transform:uppercase;color:var(--accent);
+  border:1px solid var(--accent);padding:10px 24px;border-radius:2px;
+  animation:blink 1.4s infinite;
+}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+
 /* ── HEADER ── */
 .app-header{
   display:flex;align-items:center;justify-content:space-between;
@@ -555,6 +575,12 @@ canvas#waveCanvas{
 <body>
 
 <!-- HEADER -->
+<div id="iosUnlockOverlay">
+  <div class="ul-logo">ELDA STUDIO</div>
+  <div class="ul-sub">Beatmaking · Mobile</div>
+  <div class="ul-tap">TAP POUR DÉMARRER</div>
+</div>
+
 <div class="app-header">
   <div class="logo">ELDA<sup>STUDIO</sup></div>
   <div style="display:flex;align-items:center;gap:10px;">
@@ -676,10 +702,13 @@ canvas#waveCanvas{
       <div class="d-panel-title">// Presets</div>
       <div class="presets">
         <button class="preset-btn" data-preset="boom-bap">Boom Bap</button>
-        <button class="preset-btn" data-preset="trap">Trap</button>
-        <button class="preset-btn" data-preset="lofi">Lo-Fi</button>
-        <button class="preset-btn" data-preset="boom-bap-2">Boom Bap 2</button>
+        <button class="preset-btn" data-preset="east-coast">East Coast</button>
+        <button class="preset-btn" data-preset="g-funk">G-Funk</button>
+        <button class="preset-btn" data-preset="boom-bap-2">BB2</button>
         <button class="preset-btn" data-preset="half-time">Half Time</button>
+        <button class="preset-btn" data-preset="lofi">Lo-Fi</button>
+        <button class="preset-btn" data-preset="trip-hop">Trip-Hop</button>
+        <button class="preset-btn" data-preset="bb-jazz">BB Jazz</button>
       </div>
     </div>
     <div class="d-panel">
@@ -893,14 +922,50 @@ const AC = window.AudioContext || window.webkitAudioContext;
 let ctx = null;
 let bpm = 90;
 let masterVol = 0.8;
+let _silentNode = null;
 
 function initCtx(){
   if(!ctx){
     ctx = new AC();
     buildFxChain();
+    // iOS keepalive: silent oscillator prevents context suspension
+    _silentNode = ctx.createOscillator();
+    const silentGain = ctx.createGain();
+    silentGain.gain.value = 0;
+    _silentNode.connect(silentGain);
+    silentGain.connect(ctx.destination);
+    _silentNode.start();
   }
-  if(ctx.state==='suspended') ctx.resume();
+  if(ctx.state === 'suspended') ctx.resume();
 }
+
+// iOS unlock — resume on ANY user gesture
+function iosUnlock(){
+  if(ctx && ctx.state === 'suspended') ctx.resume();
+}
+document.addEventListener('touchstart', iosUnlock, {passive:true});
+document.addEventListener('touchend',   iosUnlock, {passive:true});
+document.addEventListener('click',      iosUnlock, {passive:true});
+
+// Splash dismiss — forces AudioContext creation on first tap (iOS requirement)
+const overlay = document.getElementById('iosUnlockOverlay');
+function dismissSplash(e){
+  initCtx(); // create ctx inside user gesture = iOS unlocked
+  overlay.style.transition='opacity .3s';
+  overlay.style.opacity='0';
+  setTimeout(()=>overlay.style.display='none', 320);
+  overlay.removeEventListener('touchend', dismissSplash);
+  overlay.removeEventListener('click', dismissSplash);
+}
+overlay.addEventListener('touchend', dismissSplash, {passive:true});
+overlay.addEventListener('click', dismissSplash);
+
+// Resume when app comes back to foreground
+document.addEventListener('visibilitychange', ()=>{
+  if(document.visibilityState === 'visible' && ctx && ctx.state === 'suspended'){
+    ctx.resume();
+  }
+});
 
 // ══════════════════════════════
 //  GLOBAL FX CHAIN
@@ -1250,10 +1315,18 @@ function updateIndicator(step){
 
 const PRESETS={
   'boom-bap':  {kick:[1,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0],snare:[0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0],clap:[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],hihat:[1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0],openhat:[0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,1],perc:[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]},
-  'trap':      {kick:[1,0,0,0,0,0,1,0,0,1,0,0,0,0,0,0],snare:[0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0],clap:[0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,1],hihat:[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],openhat:[0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0],perc:[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]},
-  'lofi':      {kick:[1,0,0,0,0,0,0,1,0,0,1,0,0,0,0,0],snare:[0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0],clap:[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],hihat:[1,0,0,1,0,0,1,0,1,0,0,1,0,0,1,0],openhat:[0,0,1,0,0,0,0,0,0,1,0,0,0,0,0,0],perc:[0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0]},
+  // East Coast — kick lourd sur 1, snare sec, hihat straight
+  'east-coast':{kick:[1,0,0,0,0,0,0,1,0,0,1,0,0,0,0,0],snare:[0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0],clap:[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],hihat:[1,0,0,1,0,0,1,0,0,1,0,0,1,0,1,0],openhat:[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],perc:[0,0,1,0,0,0,0,0,0,0,0,1,0,0,0,0]},
+  // G-Funk — kick mou, hihat shuffle, openhat fréquent
+  'g-funk':    {kick:[1,0,0,0,1,0,0,1,0,0,1,0,0,0,0,0],snare:[0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0],clap:[0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0],hihat:[1,0,1,1,0,1,1,0,1,0,1,1,0,1,1,0],openhat:[0,0,0,0,0,0,1,0,0,0,0,0,0,0,1,0],perc:[0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0]},
   'boom-bap-2':{kick:[1,0,0,0,0,0,1,0,1,0,0,0,0,0,0,0],snare:[0,0,0,0,1,0,0,0,0,0,0,0,1,0,1,0],clap:[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],hihat:[1,1,0,1,1,0,1,0,1,1,0,1,1,0,1,0],openhat:[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],perc:[0,0,1,0,0,0,0,0,0,0,1,0,0,0,0,0]},
   'half-time': {kick:[1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],snare:[0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0],clap:[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],hihat:[1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0],openhat:[0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0],perc:[0,0,0,1,0,0,0,0,0,0,0,1,0,0,0,0]},
+  // Lo-Fi Chill — tempo lent, swing prononcé, léger
+  'lofi':      {kick:[1,0,0,0,0,0,0,1,0,0,1,0,0,0,0,0],snare:[0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0],clap:[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],hihat:[1,0,0,1,0,0,1,0,1,0,0,1,0,0,1,0],openhat:[0,0,1,0,0,0,0,0,0,1,0,0,0,0,0,0],perc:[0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0]},
+  // Trip-Hop — à la Portishead, kick rare, snare lourd sur 3
+  'trip-hop':  {kick:[1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],snare:[0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0],clap:[0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,1],hihat:[1,0,1,0,0,0,1,0,1,0,1,0,0,0,1,0],openhat:[0,0,0,0,0,0,0,1,0,0,0,0,0,1,0,0],perc:[0,1,0,0,0,0,0,0,0,1,0,0,0,0,0,0]},
+  // Boom Bap Jazz — ride remplace le hihat, groove ouvert
+  'bb-jazz':   {kick:[1,0,0,0,0,0,1,0,0,0,1,0,0,0,0,0],snare:[0,0,0,0,1,0,0,1,0,0,0,0,1,0,0,0],clap:[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],hihat:[1,0,1,1,0,1,0,1,1,0,1,1,0,1,0,1],openhat:[0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0],perc:[0,0,0,1,0,0,0,0,0,0,0,1,0,0,0,0]},
 };
 function loadPreset(name){
   const p=PRESETS[name];
