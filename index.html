@@ -412,6 +412,24 @@ input[type=range]::-webkit-slider-thumb{
 }
 .pad-mode-row{display:flex;gap:4px;}
 
+.pad-bottom{
+  display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+  padding:8px 14px;border-top:1px solid var(--border);
+  flex-shrink:0;background:var(--surface);
+}
+.pad-loop-btn{
+  font-family:'Space Mono';font-size:.6rem;font-weight:700;
+  letter-spacing:.1em;text-transform:uppercase;
+  padding:7px 12px;border:1px solid var(--border);
+  background:var(--surface2);color:var(--text);
+  cursor:pointer;border-radius:2px;transition:all .1s;
+  -webkit-tap-highlight-color:transparent;
+}
+.pad-loop-btn:disabled{opacity:.35;cursor:default;}
+.pad-loop-btn.recording{background:var(--accent2);border-color:var(--accent2);color:#fff;animation:pulse 1s infinite;}
+.pad-loop-btn.playing{background:var(--accent);border-color:var(--accent);color:#0a0807;}
+.pad-loop-btn.secondary{border-color:var(--muted);color:var(--text-dim);}
+
 /* ════ ARP / BASS / SAMPLER shared ════ */
 .mod-top{
   display:flex;align-items:center;gap:8px;flex-wrap:wrap;
@@ -909,7 +927,18 @@ canvas#waveCanvas{
   <div class="pad-grid" id="padGrid"></div>
 
   <div class="pad-bottom">
-    <span style="font-size:.52rem;letter-spacing:.15em;color:var(--text-dim);text-transform:uppercase;">TAP · HOLD POUR SUSTAIN</span>
+    <button class="pad-loop-btn" id="padRecBtn">⏺ REC</button>
+    <button class="pad-loop-btn secondary" id="padLoopPlayBtn" disabled>▶ LOOP</button>
+    <button class="pad-loop-btn secondary" id="padLoopClearBtn" disabled>✕ CLR</button>
+    <div style="display:flex;flex-direction:column;gap:2px;margin-left:auto;">
+      <div style="font-size:.44rem;letter-spacing:.15em;color:var(--text-dim);text-transform:uppercase;">BARS</div>
+      <div style="display:flex;gap:3px;">
+        <button class="pad-pill active" data-loop-bars="1">1</button>
+        <button class="pad-pill" data-loop-bars="2">2</button>
+        <button class="pad-pill" data-loop-bars="4">4</button>
+      </div>
+    </div>
+    <div style="font-size:.5rem;letter-spacing:.12em;color:var(--text-dim);text-transform:uppercase;" id="loopStatus">PLAY · HOLD SUSTAIN</div>
   </div>
 
 </div>
@@ -1584,21 +1613,54 @@ function synthPluck(freq, onStop){
 
 function synthBass(freq, onStop){
   const mg=ctx.createGain();
-  mg.gain.setValueAtTime(0,ctx.currentTime);
-  mg.gain.linearRampToValueAtTime(.4*masterVol,ctx.currentTime+.02);
   mg.connect(fxInput);
-  const f=ctx.createBiquadFilter();f.type='lowpass';f.frequency.value=600;f.Q.value=4;
-  const o=ctx.createOscillator(),o2=ctx.createOscillator();
-  o.type='sawtooth';o.frequency.value=freq/2;
-  o2.type='square';o2.frequency.value=freq/2;
-  const g2=ctx.createGain();g2.gain.value=.3;
-  o.connect(f);o2.connect(g2);g2.connect(f);f.connect(mg);
-  o.start();o2.start();
+
+  // Sub sine — le cœur du son
+  const sub=ctx.createOscillator();
+  sub.type='sine'; sub.frequency.value=freq;
+  const subG=ctx.createGain(); subG.gain.value=.55*masterVol;
+  sub.connect(subG); subG.connect(mg);
+
+  // Harmonique basse — corps et présence
+  const harm=ctx.createOscillator();
+  harm.type='triangle'; harm.frequency.value=freq;
+  const harmF=ctx.createBiquadFilter(); harmF.type='lowpass'; harmF.frequency.value=freq*3; harmF.Q.value=2;
+  const harmG=ctx.createGain(); harmG.gain.value=.22*masterVol;
+  harm.connect(harmF); harmF.connect(harmG); harmG.connect(mg);
+
+  // Saturation douce via waveshaper
+  const ws=ctx.createWaveShaper();
+  const wsCurve=new Float32Array(256);
+  for(let i=0;i<256;i++){const x=i*2/256-1; wsCurve[i]=x<0?-Math.pow(Math.abs(x),.7):Math.pow(x,.7);}
+  ws.curve=wsCurve;
+  const satOsc=ctx.createOscillator();
+  satOsc.type='sawtooth'; satOsc.frequency.value=freq;
+  const satG=ctx.createGain(); satG.gain.value=.08*masterVol;
+  satOsc.connect(ws); ws.connect(satG); satG.connect(mg);
+
+  // Punch d'attaque — click transient
+  const clickOsc=ctx.createOscillator();
+  clickOsc.type='sine'; clickOsc.frequency.setValueAtTime(freq*4, ctx.currentTime);
+  clickOsc.frequency.exponentialRampToValueAtTime(freq, ctx.currentTime+.04);
+  const clickG=ctx.createGain();
+  clickG.gain.setValueAtTime(.6*masterVol, ctx.currentTime);
+  clickG.gain.exponentialRampToValueAtTime(.001, ctx.currentTime+.06);
+  clickOsc.connect(clickG); clickG.connect(mg);
+
+  // Envelope globale
+  mg.gain.setValueAtTime(0, ctx.currentTime);
+  mg.gain.linearRampToValueAtTime(1, ctx.currentTime+.008);
+  mg.gain.setValueAtTime(1, ctx.currentTime+.1);
+
+  sub.start(); harm.start(); satOsc.start(); clickOsc.start();
+  clickOsc.stop(ctx.currentTime+.1);
+
   return ()=>{
-    mg.gain.cancelScheduledValues(ctx.currentTime);
-    mg.gain.setValueAtTime(mg.gain.value,ctx.currentTime);
-    mg.gain.linearRampToValueAtTime(0,ctx.currentTime+.12);
-    try{o.stop(ctx.currentTime+.13);o2.stop(ctx.currentTime+.13);}catch(e){}
+    const t=ctx.currentTime;
+    mg.gain.cancelScheduledValues(t);
+    mg.gain.setValueAtTime(mg.gain.value, t);
+    mg.gain.linearRampToValueAtTime(0, t+.18);
+    try{sub.stop(t+.2); harm.stop(t+.2); satOsc.stop(t+.2);}catch(e){}
   };
 }
 
@@ -1626,6 +1688,127 @@ function makeReverb(dur){
   rv.buffer=buf;return rv;
 }
 
+// ══════════════════════════════
+//  PAD LOOPER ENGINE
+// ══════════════════════════════
+let loopBars=1;
+let loopRecording=false, loopPlaying=false;
+let loopEvents=[]; // [{note, oct, onTime, offTime}]
+let loopStartTime=0, loopDuration=0;
+let loopTimer=null;
+let loopActiveNotes={}; // note+oct key → {note,oct,onTime}
+
+function loopBarDur(){ return (60/bpm)*4*loopBars; }
+
+function startPadRec(){
+  initCtx();
+  loopRecording=true; loopPlaying=false;
+  loopEvents=[]; loopActiveNotes={};
+  loopStartTime=ctx.currentTime;
+  loopDuration=loopBarDur();
+  document.getElementById('padRecBtn').textContent='⏹ STOP';
+  document.getElementById('padRecBtn').classList.add('recording');
+  document.getElementById('loopStatus').textContent='⏺ REC...';
+  // Auto-stop after loopDuration
+  loopTimer=setTimeout(stopPadRec, loopDuration*1000);
+}
+
+function stopPadRec(){
+  clearTimeout(loopTimer);
+  loopRecording=false;
+  document.getElementById('padRecBtn').textContent='⏺ REC';
+  document.getElementById('padRecBtn').classList.remove('recording');
+  if(loopEvents.length>0){
+    document.getElementById('padLoopPlayBtn').disabled=false;
+    document.getElementById('padLoopClearBtn').disabled=false;
+    document.getElementById('loopStatus').textContent=`${loopEvents.length} NOTE${loopEvents.length>1?'S':''} · LOOP PRÊT`;
+    startLoopPlayback();
+  } else {
+    document.getElementById('loopStatus').textContent='RIEN ENREGISTRÉ';
+  }
+}
+
+function startLoopPlayback(){
+  if(!loopEvents.length) return;
+  loopPlaying=true;
+  document.getElementById('padLoopPlayBtn').textContent='■ STOP';
+  document.getElementById('padLoopPlayBtn').classList.add('playing');
+  scheduleLoop();
+}
+
+function stopLoopPlayback(){
+  loopPlaying=false;
+  clearTimeout(loopTimer);
+  document.getElementById('padLoopPlayBtn').textContent='▶ LOOP';
+  document.getElementById('padLoopPlayBtn').classList.remove('playing');
+  document.getElementById('loopStatus').textContent=`${loopEvents.length} NOTE${loopEvents.length>1?'S':''} · LOOP PRÊT`;
+}
+
+function scheduleLoop(){
+  if(!loopPlaying) return;
+  initCtx();
+  const now=ctx.currentTime;
+  const dur=loopBarDur();
+  loopEvents.forEach(ev=>{
+    const onT=now+ev.onTime;
+    const offT=now+ev.offTime;
+    const noteDur=Math.max(0.05, ev.offTime-ev.onTime);
+    const freq=noteFreqP(ev.note, ev.oct);
+    const fn=PAD_SOUNDS[padSound]||synthPad;
+    // schedule via setTimeout approximation
+    setTimeout(()=>{
+      if(!loopPlaying) return;
+      const stopFn=fn(freq);
+      // highlight pad
+      document.querySelectorAll(`.pad[data-note="${ev.note}"][data-oct="${ev.oct}"]`).forEach(p=>{
+        p.classList.add('lit');
+        setTimeout(()=>p.classList.remove('lit'), noteDur*1000);
+      });
+      setTimeout(()=>{ if(stopFn) stopFn(); }, noteDur*1000);
+    }, Math.max(0, ev.onTime*1000));
+  });
+  loopTimer=setTimeout(()=>{ if(loopPlaying) scheduleLoop(); }, dur*1000);
+  document.getElementById('loopStatus').textContent='⟳ LOOPING';
+}
+
+function clearLoop(){
+  stopLoopPlayback();
+  loopEvents=[];
+  document.getElementById('padLoopPlayBtn').disabled=true;
+  document.getElementById('padLoopClearBtn').disabled=true;
+  document.getElementById('loopStatus').textContent='PLAY · HOLD SUSTAIN';
+}
+
+// Record note on/off
+function loopNoteOn(note, oct){
+  if(!loopRecording) return;
+  const key=note+oct;
+  loopActiveNotes[key]={note, oct, onTime: ctx.currentTime-loopStartTime};
+}
+function loopNoteOff(note, oct){
+  if(!loopRecording) return;
+  const key=note+oct;
+  if(loopActiveNotes[key]){
+    const ev=loopActiveNotes[key];
+    ev.offTime=ctx.currentTime-loopStartTime;
+    if(ev.offTime>ev.onTime) loopEvents.push({...ev});
+    delete loopActiveNotes[key];
+  }
+}
+
+document.getElementById('padRecBtn').addEventListener('click',()=>{
+  if(loopRecording) stopPadRec(); else startPadRec();
+});
+document.getElementById('padLoopPlayBtn').addEventListener('click',()=>{
+  if(loopPlaying) stopLoopPlayback(); else startLoopPlayback();
+});
+document.getElementById('padLoopClearBtn').addEventListener('click', clearLoop);
+document.querySelectorAll('[data-loop-bars]').forEach(b=>b.addEventListener('click',()=>{
+  loopBars=+b.dataset.loopBars;
+  document.querySelectorAll('[data-loop-bars]').forEach(x=>x.classList.remove('active'));
+  b.classList.add('active');
+}));
+
 function buildPadGrid(){
   const el=document.getElementById('padGrid');el.innerHTML='';
   // 16 pads: root + 15 semitones up (2 octaves chromatic layout, 4 cols)
@@ -1643,6 +1826,8 @@ function buildPadGrid(){
     pad.className='pad'+(semi?' semitone':'');
     const color=PAD_COLORS[note]||'var(--accent)';
     pad.style.setProperty('--pad-color',color);
+    pad.dataset.note=note;
+    pad.dataset.oct=oct;
     pad.innerHTML=`<div class="pad-note">${note}</div><div class="pad-oct">${oct}</div>`;
 
     let stopFn=null;
@@ -1654,10 +1839,12 @@ function buildPadGrid(){
       const fn=PAD_SOUNDS[padSound]||synthPad;
       stopFn=fn(freq);
       pad.classList.add('lit');
+      loopNoteOn(note, oct);
     };
     const release=()=>{
       if(stopFn){stopFn();stopFn=null;}
       setTimeout(()=>pad.classList.remove('lit'),150);
+      loopNoteOff(note, oct);
     };
 
     // Touch
