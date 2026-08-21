@@ -1185,6 +1185,21 @@ function wireFxUI(){
 }
 wireFxUI();
 
+// ── MODULE VOLUMES (déclarations manquantes) ──
+const moduleVols = {
+  drums: 0.85, chords: 0.75, pad: 0.75,
+  arp: 0.75, bass: 0.80, sampler: 0.80
+};
+const moduleVolIds = {
+  drums:   'volDrums',
+  chords:  'volChords',
+  pad:     'volPad',
+  arp:     'volArp',
+  bass:    'volBass',
+  sampler: 'volSampler',
+};
+function moduleOutVol(id){ return moduleVols[id] !== undefined ? moduleVols[id] : 0.8; }
+
 document.getElementById('bpmSlider').addEventListener('input', function(){
   bpm = +this.value;
   document.getElementById('bpmVal').textContent = bpm;
