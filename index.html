@@ -598,6 +598,50 @@ canvas#waveCanvas{
   -webkit-tap-highlight-color:transparent;text-transform:uppercase;
 }
 .loop-toggle.on{border-color:var(--accent);color:var(--accent);}
+/* ════ PIANO ROLL ════ */
+.roll-top{
+  display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+  padding:7px 12px;border-bottom:1px solid var(--border);
+  background:var(--surface);flex-shrink:0;
+}
+.roll-btn{
+  font-family:'Space Mono';font-size:.58rem;font-weight:700;
+  letter-spacing:.1em;text-transform:uppercase;
+  padding:6px 12px;border:1px solid var(--border);
+  background:var(--surface2);color:var(--text);
+  cursor:pointer;border-radius:2px;transition:all .1s;
+  -webkit-tap-highlight-color:transparent;
+}
+.roll-btn.go{background:var(--accent2);border-color:var(--accent2);color:#fff;}
+.roll-btn.go.on{background:var(--muted);border-color:var(--muted);}
+.roll-btn:active{opacity:.7;}
+.roll-wrap{
+  display:flex;flex:1;overflow:hidden;position:relative;
+}
+.roll-labels{
+  width:38px;flex-shrink:0;overflow:hidden;
+  background:var(--surface);border-right:1px solid var(--border);
+  position:relative;
+}
+.roll-canvas-wrap{
+  flex:1;overflow:scroll;position:relative;
+  -webkit-overflow-scrolling:touch;
+}
+#rollCanvas{
+  display:block;cursor:crosshair;
+  touch-action:none;
+}
+#rollPlayhead{
+  position:absolute;top:0;bottom:0;width:2px;
+  background:var(--accent);pointer-events:none;
+  opacity:0;transition:opacity .1s;
+  left:0;
+}
+.roll-bottom{
+  display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+  padding:7px 12px;border-top:1px solid var(--border);
+  flex-shrink:0;background:var(--surface);
+}
 </style>
 </head>
 <body>
@@ -638,6 +682,7 @@ canvas#waveCanvas{
   <div class="tab" data-tab="arp">⟳ ARP</div>
   <div class="tab" data-tab="bass">↓ BASS</div>
   <div class="tab" data-tab="sampler">⏺ SAMP</div>
+  <div class="tab" data-tab="roll">🎹 ROLL</div>
 </div>
 
 <!-- FX BAR -->
@@ -967,6 +1012,64 @@ canvas#waveCanvas{
       </div>
     </div>
     <div style="font-size:.5rem;letter-spacing:.12em;color:var(--text-dim);text-transform:uppercase;" id="loopStatus">PLAY · HOLD SUSTAIN</div>
+  </div>
+
+</div>
+
+<!-- ════ PIANO ROLL PANEL ════ -->
+<div class="panel" id="panel-roll">
+
+  <div class="roll-top">
+    <button class="roll-btn go" id="rollPlayBtn">▶ PLAY</button>
+    <button class="roll-btn" id="rollClearBtn">✕ CLR</button>
+    <div class="mod-grp">
+      <div class="mod-lbl">Bars</div>
+      <div style="display:flex;gap:3px;">
+        <button class="mod-pill active" data-roll-bars="1">1</button>
+        <button class="mod-pill" data-roll-bars="2">2</button>
+        <button class="mod-pill" data-roll-bars="4">4</button>
+      </div>
+    </div>
+    <div class="mod-grp">
+      <div class="mod-lbl">Piste</div>
+      <div style="display:flex;gap:3px;">
+        <button class="mod-pill active" data-roll-track="bass">Bass</button>
+        <button class="mod-pill" data-roll-track="chords">Chords</button>
+        <button class="mod-pill" data-roll-track="melody">Melody</button>
+      </div>
+    </div>
+    <div class="mod-grp">
+      <div class="mod-lbl">Quant</div>
+      <div style="display:flex;gap:3px;">
+        <button class="mod-pill" data-roll-quant="4">1/4</button>
+        <button class="mod-pill active" data-roll-quant="8">1/8</button>
+        <button class="mod-pill" data-roll-quant="16">1/16</button>
+      </div>
+    </div>
+    <div class="mod-grp">
+      <div class="mod-lbl">Gamme</div>
+      <div style="display:flex;gap:3px;flex-wrap:wrap;" id="rollScalePills"></div>
+    </div>
+    <div class="mod-grp">
+      <div class="mod-lbl">Root</div>
+      <div style="display:flex;gap:3px;flex-wrap:wrap;" id="rollRootPills"></div>
+    </div>
+  </div>
+
+  <div class="roll-wrap" id="rollWrap">
+    <canvas id="rollLabels"></canvas>
+    <div class="roll-canvas-wrap" id="rollScroll">
+      <canvas id="rollCanvas"></canvas>
+      <div id="rollPlayhead"></div>
+    </div>
+  </div>
+
+  <div class="roll-bottom">
+    <span style="font-size:.48rem;letter-spacing:.1em;color:var(--text-dim);text-transform:uppercase;">TAP=POSER · TAP NOTE=SUP · DRAG→=LONGUEUR</span>
+    <div style="margin-left:auto;display:flex;gap:6px;">
+      <button class="roll-btn" id="rollSendBass">→ BASS</button>
+      <button class="roll-btn" id="rollQuantizeBtn">⌗ QUANT</button>
+    </div>
   </div>
 
 </div>
@@ -2534,6 +2637,445 @@ fsBtn.addEventListener('click', toggleFS);
 document.addEventListener('fullscreenchange',()=>{ fsBtn.textContent=document.fullscreenElement?'✕':'⛶'; });
 document.addEventListener('webkitfullscreenchange',()=>{ fsBtn.textContent=document.webkitFullscreenElement?'✕':'⛶'; });
 
+// ══════════════════════════════
+//  PIANO ROLL ENGINE
+// ══════════════════════════════
+const ROLL_SCALES={
+  'Minor':  [0,2,3,5,7,8,10],
+  'Major':  [0,2,4,5,7,9,11],
+  'Penta':  [0,3,5,7,10],
+  'Blues':  [0,3,5,6,7,10],
+  'Dorian': [0,2,3,5,7,9,10],
+  'Chrom':  [0,1,2,3,4,5,6,7,8,9,10,11],
+};
+const ROLL_ALL_NOTES=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+const ROLL_SHARPS=['C#','D#','F#','G#','A#'];
+
+let rollRoot='A', rollScale='Minor', rollBars=1, rollQuant=8, rollTrack='bass';
+let rollNotes=[]; // [{row, startBeat, durBeats}]  row=0 is highest note
+let rollPlaying=false, rollTimer=null, rollPlayBeat=0, rollNextTime=0;
+
+// Layout constants
+const ROLL_ROW_H=28;
+const ROLL_BEAT_W=48; // px per beat (1/4 note) at quant=8
+const ROLL_LABEL_W=38;
+
+function rollScaleNotes(){
+  const scale=ROLL_SCALES[rollScale];
+  const ri=ROLL_ALL_NOTES.indexOf(rollRoot);
+  // 3 octaves, top down
+  const notes=[];
+  for(let oct=5;oct>=3;oct--){
+    for(let i=scale.length-1;i>=0;i--){
+      const ni=(ri+scale[i])%12;
+      notes.push({name:ROLL_ALL_NOTES[ni], oct, midi:(oct+1)*12+ni});
+    }
+  }
+  return notes;
+}
+
+function rollTotalBeats(){ return rollBars*4; }
+function rollStepBeats(){ return 4/rollQuant; }
+function rollCanvasW(){ return rollTotalBeats()*ROLL_BEAT_W; }
+function rollCanvasH(){ return rollScaleNotes().length*ROLL_ROW_H; }
+
+function rollDraw(){
+  const canvas=document.getElementById('rollCanvas');
+  if(!canvas) return;
+  const notes=rollScaleNotes();
+  const totalBeats=rollTotalBeats();
+  const W=rollCanvasW(), H=rollCanvasH();
+  canvas.width=W; canvas.height=H;
+  canvas.style.width=W+'px'; canvas.style.height=H+'px';
+  const c=canvas.getContext('2d');
+
+  // Background rows
+  notes.forEach((n,i)=>{
+    c.fillStyle=ROLL_SHARPS.includes(n.name)?'#141210':'#1a1714';
+    c.fillRect(0,i*ROLL_ROW_H,W,ROLL_ROW_H);
+    // beat lines
+    for(let b=0;b<=totalBeats;b++){
+      c.strokeStyle=b%4===0?'#3a3530':'#252018';
+      c.lineWidth=b%4===0?1.5:0.5;
+      c.beginPath();
+      c.moveTo(b*ROLL_BEAT_W,i*ROLL_ROW_H);
+      c.lineTo(b*ROLL_BEAT_W,(i+1)*ROLL_ROW_H);
+      c.stroke();
+    }
+    // sub-beat lines (quant grid)
+    const stepW=ROLL_BEAT_W*rollStepBeats();
+    for(let s=0;s*stepW<W;s++){
+      c.strokeStyle='#1e1b18';
+      c.lineWidth=0.5;
+      c.beginPath();
+      c.moveTo(s*stepW,i*ROLL_ROW_H);
+      c.lineTo(s*stepW,(i+1)*ROLL_ROW_H);
+      c.stroke();
+    }
+    // row separator
+    c.strokeStyle='#252018';
+    c.lineWidth=0.5;
+    c.beginPath();
+    c.moveTo(0,(i+1)*ROLL_ROW_H-.5);
+    c.lineTo(W,(i+1)*ROLL_ROW_H-.5);
+    c.stroke();
+  });
+
+  // Bar lines (thicker)
+  for(let b=0;b<=rollBars;b++){
+    c.strokeStyle='#4a4440';
+    c.lineWidth=2;
+    c.beginPath();
+    c.moveTo(b*4*ROLL_BEAT_W,0);
+    c.lineTo(b*4*ROLL_BEAT_W,H);
+    c.stroke();
+  }
+
+  // Notes
+  rollNotes.forEach(n=>{
+    const x=n.startBeat*ROLL_BEAT_W;
+    const y=n.row*ROLL_ROW_H+2;
+    const w=Math.max(4,n.durBeats*ROLL_BEAT_W-2);
+    const h=ROLL_ROW_H-4;
+    // Track color
+    const col=rollTrack==='bass'?'#6ec87a':rollTrack==='chords'?'#c8a96e':'#6eb5c8';
+    c.fillStyle=col;
+    c.beginPath();
+    c.roundRect ? c.roundRect(x+1,y,w,h,2) : c.rect(x+1,y,w,h);
+    c.fill();
+    // Note label
+    if(w>18){
+      const noteData=notes[n.row];
+      c.fillStyle='#0a0807';
+      c.font=`bold 9px Space Mono,monospace`;
+      c.fillText(noteData?noteData.name+noteData.oct:'',x+4,y+h*.7);
+    }
+  });
+
+  // Labels canvas
+  rollDrawLabels(notes);
+}
+
+function rollDrawLabels(notes){
+  const canvas=document.getElementById('rollLabels');
+  if(!canvas) return;
+  const H=rollCanvasH();
+  canvas.width=ROLL_LABEL_W*2; canvas.height=H;
+  canvas.style.width=ROLL_LABEL_W+'px'; canvas.style.height=H+'px';
+  const c=canvas.getContext('2d');
+  c.clearRect(0,0,ROLL_LABEL_W*2,H);
+  notes.forEach((n,i)=>{
+    const y=i*ROLL_ROW_H;
+    c.fillStyle=ROLL_SHARPS.includes(n.name)?'#141210':'#1a1714';
+    c.fillRect(0,y,ROLL_LABEL_W*2,ROLL_ROW_H);
+    if(!ROLL_SHARPS.includes(n.name)){
+      c.fillStyle= n.name==='C'?'#c8a96e':'#7a726a';
+      c.font=`${n.name==='C'?'bold ':''} 9px Space Mono,monospace`;
+      c.fillText(n.name+n.oct,3,y+ROLL_ROW_H*.68);
+    }
+    c.strokeStyle='#252018';
+    c.lineWidth=0.5;
+    c.beginPath();
+    c.moveTo(0,y+ROLL_ROW_H-.5);
+    c.lineTo(ROLL_LABEL_W*2,y+ROLL_ROW_H-.5);
+    c.stroke();
+  });
+  // border right
+  c.strokeStyle='#2a2520';
+  c.lineWidth=1;
+  c.beginPath();
+  c.moveTo(ROLL_LABEL_W*2-.5,0);
+  c.lineTo(ROLL_LABEL_W*2-.5,H);
+  c.stroke();
+}
+
+// ── Touch / Mouse interaction ──
+let rollDragNote=null, rollDragStartX=0, rollDragOrigDur=0;
+let rollPointerDown=false;
+
+function rollXYToNote(x,y){
+  const row=Math.floor(y/ROLL_ROW_H);
+  const beat=x/ROLL_BEAT_W;
+  return {row,beat};
+}
+
+function rollSnapBeat(beat){
+  const step=rollStepBeats();
+  return Math.round(beat/step)*step;
+}
+
+function rollFindNote(row,beat){
+  return rollNotes.find(n=>n.row===row && beat>=n.startBeat && beat<n.startBeat+n.durBeats);
+}
+
+function rollPointerDownFn(e){
+  e.preventDefault();
+  rollPointerDown=true;
+  const rect=e.target.getBoundingClientRect();
+  const clientX=e.touches?e.touches[0].clientX:e.clientX;
+  const clientY=e.touches?e.touches[0].clientY:e.clientY;
+  const x=clientX-rect.left;
+  const y=clientY-rect.top;
+  const {row,beat}=rollXYToNote(x,y);
+  const existing=rollFindNote(row,beat);
+  if(existing){
+    // tap on note → delete OR start drag for resize
+    rollDragNote=existing;
+    rollDragStartX=x;
+    rollDragOrigDur=existing.durBeats;
+  } else {
+    // new note
+    const snapped=rollSnapBeat(beat);
+    const stepDur=rollStepBeats();
+    if(row>=0 && row<rollScaleNotes().length && snapped<rollTotalBeats()){
+      const newNote={row, startBeat:snapped, durBeats:stepDur};
+      rollNotes.push(newNote);
+      rollDragNote=newNote;
+      rollDragStartX=x;
+      rollDragOrigDur=stepDur;
+      // preview sound
+      initCtx();
+      const noteData=rollScaleNotes()[row];
+      if(noteData) rollPreviewNote(noteData.midi);
+    }
+  }
+  rollDraw();
+}
+
+function rollPointerMoveFn(e){
+  if(!rollPointerDown||!rollDragNote) return;
+  e.preventDefault();
+  const rect=e.target.getBoundingClientRect();
+  const clientX=e.touches?e.touches[0].clientX:e.clientX;
+  const x=clientX-rect.left;
+  const dx=(x-rollDragStartX)/ROLL_BEAT_W;
+  if(dx>rollStepBeats()*0.4){
+    // resize
+    const newDur=rollSnapBeat(rollDragOrigDur+dx);
+    rollDragNote.durBeats=Math.max(rollStepBeats(), Math.min(newDur, rollTotalBeats()-rollDragNote.startBeat));
+    rollDraw();
+  }
+}
+
+function rollPointerUpFn(e){
+  if(!rollPointerDown) return;
+  rollPointerDown=false;
+  const rect=e.target.getBoundingClientRect();
+  const clientX=(e.changedTouches?e.changedTouches[0].clientX:e.clientX);
+  const clientY=(e.changedTouches?e.changedTouches[0].clientY:e.clientY);
+  const x=clientX-rect.left;
+  const y=clientY-rect.top;
+  // if barely moved and tapped existing note → delete
+  if(rollDragNote && Math.abs(x-rollDragStartX)<6 && rollDragNote.durBeats===rollDragOrigDur){
+    const {beat}=rollXYToNote(x,y);
+    if(rollFindNote(rollDragNote.row,beat)===rollDragNote){
+      // it's a tap on existing → check if it was a new or existing
+      // if new (just created), keep it; if existing, delete
+      if(rollDragOrigDur===rollStepBeats() && rollNotes.indexOf(rollDragNote)===rollNotes.length-1){
+        // newly placed — keep
+      } else {
+        rollNotes=rollNotes.filter(n=>n!==rollDragNote);
+      }
+    }
+  }
+  rollDragNote=null;
+  rollDraw();
+}
+
+function rollPreviewNote(midi){
+  const freq=440*Math.pow(2,(midi-69)/12);
+  if(rollTrack==='bass') playSub(freq,0.25);
+  else if(rollTrack==='chords') playChord([freq,440*Math.pow(2,(midi+4-69)/12),440*Math.pow(2,(midi+7-69)/12)],0.4);
+  else synthPluck(freq,0.3);
+}
+
+// ── Playback ──
+function rollNoteFreq(midi){ return 440*Math.pow(2,(midi-69)/12); }
+
+function rollStartPlayback(){
+  initCtx();
+  rollPlaying=true;
+  rollPlayBeat=0;
+  rollNextTime=ctx.currentTime+.05;
+  document.getElementById('rollPlayBtn').textContent='■ STOP';
+  document.getElementById('rollPlayBtn').classList.add('on');
+  const ph=document.getElementById('rollPlayhead');
+  ph.style.opacity='1';
+  rollSchedule();
+}
+
+function rollStopPlayback(){
+  rollPlaying=false;
+  clearTimeout(rollTimer);
+  document.getElementById('rollPlayBtn').textContent='▶ PLAY';
+  document.getElementById('rollPlayBtn').classList.remove('on');
+  const ph=document.getElementById('rollPlayhead');
+  ph.style.opacity='0';
+}
+
+function rollSchedule(){
+  if(!rollPlaying) return;
+  const beatDur=60/bpm;
+  const totalBeats=rollTotalBeats();
+
+  while(rollNextTime < ctx.currentTime+0.15){
+    const beat=rollPlayBeat;
+    // find notes starting on this beat (quantized)
+    rollNotes.forEach(n=>{
+      const snapped=Math.round(n.startBeat/rollStepBeats())*rollStepBeats();
+      if(Math.abs(snapped-beat)<0.001){
+        const noteData=rollScaleNotes()[n.row];
+        if(noteData){
+          const freq=rollNoteFreq(noteData.midi);
+          const dur=n.durBeats*beatDur;
+          const t=rollNextTime;
+          setTimeout(()=>{
+            if(!rollPlaying) return;
+            if(rollTrack==='bass') playSub(freq,dur);
+            else if(rollTrack==='chords'){
+              // play as chord with 3rd and 5th
+              const m=noteData.midi;
+              playChord([rollNoteFreq(m),rollNoteFreq(m+4),rollNoteFreq(m+7)],dur);
+            } else synthPluck(freq,dur);
+          }, Math.max(0,(t-ctx.currentTime)*1000));
+        }
+      }
+    });
+
+    // Playhead
+    const delay=(rollNextTime-ctx.currentTime)*1000;
+    const _beat=beat;
+    setTimeout(()=>{
+      if(!rollPlaying) return;
+      const ph=document.getElementById('rollPlayhead');
+      const scroll=document.getElementById('rollScroll');
+      const x=_beat*ROLL_BEAT_W;
+      ph.style.left=x+'px';
+      // auto-scroll
+      const sw=scroll.offsetWidth;
+      if(x>scroll.scrollLeft+sw*.8) scroll.scrollLeft=x-sw*.2;
+      if(x<scroll.scrollLeft) scroll.scrollLeft=Math.max(0,x-20);
+    }, Math.max(0,delay));
+
+    rollPlayBeat=parseFloat((rollPlayBeat+rollStepBeats()).toFixed(6));
+    rollNextTime+=rollStepBeats()*beatDur;
+
+    if(rollPlayBeat>=totalBeats){
+      rollPlayBeat=0;
+      // schedule loop
+      rollTimer=setTimeout(()=>{ if(rollPlaying) rollSchedule(); }, Math.max(0,(rollNextTime-ctx.currentTime)*1000-50));
+      return;
+    }
+  }
+  rollTimer=setTimeout(rollSchedule, 20);
+}
+
+// ── Quantize existing notes ──
+function rollQuantizeAll(){
+  const step=rollStepBeats();
+  rollNotes.forEach(n=>{
+    n.startBeat=Math.round(n.startBeat/step)*step;
+    n.durBeats=Math.max(step, Math.round(n.durBeats/step)*step);
+    // clamp
+    if(n.startBeat+n.durBeats>rollTotalBeats()) n.durBeats=rollTotalBeats()-n.startBeat;
+  });
+  rollDraw();
+}
+
+// ── Send to Bass module ──
+function rollSendToBass(){
+  // Map piano roll notes to bass seq (8 steps)
+  const totalBeats=rollTotalBeats();
+  const stepBeats=totalBeats/8;
+  bassSeqData=Array(8).fill(null);
+  rollNotes.forEach(n=>{
+    const slot=Math.floor(n.startBeat/stepBeats);
+    if(slot>=0&&slot<8){
+      const noteData=rollScaleNotes()[n.row];
+      if(noteData) bassSeqData[slot]=noteData.name;
+    }
+  });
+  buildBassSeq();
+  // Switch to bass tab
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+  document.querySelector('[data-tab="bass"]').classList.add('active');
+  document.getElementById('panel-bass').classList.add('active');
+}
+
+// ── Scale/Root pills ──
+function buildRollScalePills(){
+  const el=document.getElementById('rollScalePills'); el.innerHTML='';
+  Object.keys(ROLL_SCALES).forEach(s=>{
+    const p=document.createElement('button'); p.className='mod-pill'+(s===rollScale?' active':'');
+    p.textContent=s;
+    p.addEventListener('click',()=>{rollScale=s;buildRollScalePills();rollDraw();});
+    el.appendChild(p);
+  });
+}
+function buildRollRootPills(){
+  const el=document.getElementById('rollRootPills'); el.innerHTML='';
+  ROLL_ALL_NOTES.forEach(n=>{
+    const p=document.createElement('button'); p.className='mod-pill'+(n===rollRoot?' active':'');
+    p.textContent=n;
+    p.addEventListener('click',()=>{rollRoot=n;buildRollRootPills();rollDraw();});
+    el.appendChild(p);
+  });
+}
+
+// ── Init canvas events ──
+function initRollCanvas(){
+  const canvas=document.getElementById('rollCanvas');
+  if(!canvas) return;
+  canvas.addEventListener('mousedown', rollPointerDownFn);
+  canvas.addEventListener('mousemove', rollPointerMoveFn);
+  canvas.addEventListener('mouseup',   rollPointerUpFn);
+  canvas.addEventListener('touchstart', rollPointerDownFn, {passive:false});
+  canvas.addEventListener('touchmove',  rollPointerMoveFn, {passive:false});
+  canvas.addEventListener('touchend',   rollPointerUpFn,   {passive:false});
+}
+
+// ── Control events ──
+document.getElementById('rollPlayBtn').addEventListener('click',()=>{
+  if(rollPlaying) rollStopPlayback(); else rollStartPlayback();
+});
+document.getElementById('rollClearBtn').addEventListener('click',()=>{
+  rollNotes=[]; rollDraw();
+});
+document.getElementById('rollQuantizeBtn').addEventListener('click', rollQuantizeAll);
+document.getElementById('rollSendBass').addEventListener('click', rollSendToBass);
+
+document.querySelectorAll('[data-roll-bars]').forEach(b=>b.addEventListener('click',()=>{
+  rollBars=+b.dataset.rollBars;
+  document.querySelectorAll('[data-roll-bars]').forEach(x=>x.classList.remove('active'));
+  b.classList.add('active');
+  rollNotes=rollNotes.filter(n=>n.startBeat<rollTotalBeats());
+  rollDraw();
+}));
+document.querySelectorAll('[data-roll-quant]').forEach(b=>b.addEventListener('click',()=>{
+  rollQuant=+b.dataset.rollQuant;
+  document.querySelectorAll('[data-roll-quant]').forEach(x=>x.classList.remove('active'));
+  b.classList.add('active');
+  rollDraw();
+}));
+document.querySelectorAll('[data-roll-track]').forEach(b=>b.addEventListener('click',()=>{
+  rollTrack=b.dataset.rollTrack;
+  document.querySelectorAll('[data-roll-track]').forEach(x=>x.classList.remove('active'));
+  b.classList.add('active');
+  // Update send button label
+  document.getElementById('rollSendBass').textContent=rollTrack==='bass'?'→ BASS':rollTrack==='chords'?'→ CHORDS':'→ MÉLO';
+  rollDraw();
+}));
+
+// Redraw on tab switch
+document.querySelectorAll('.tab').forEach(t=>{
+  t.addEventListener('click',()=>{
+    if(t.dataset.tab==='roll'){
+      setTimeout(()=>{ initRollCanvas(); rollDraw(); },50);
+    }
+  });
+});
+
 // ══ INIT ══
 loadPreset('boom-bap');
 buildSeq();
@@ -2554,6 +3096,8 @@ buildBassRootPills();
 buildBassNoteSel();
 buildBassSeq();
 initSampSlots();
+buildRollScalePills();
+buildRollRootPills();
 </script>
 </body>
 </html>
